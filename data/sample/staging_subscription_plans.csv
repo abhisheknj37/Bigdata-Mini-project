@@ -1,0 +1,5 @@
+plan_id,plan_name,monthly_price_usd,max_streams,video_quality,is_ad_supported
+1,Basic Ad-Supported,6.99,1,HD (720p),Y
+2,Standard Full HD,15.49,2,Full HD (1080p),N
+3,Premium 4K Ultra HD,22.99,4,4K Ultra HD,N
+4,Family Premium Bundle,27.99,6,4K Ultra HD + Atmos,N

@@ -1,0 +1,156 @@
+<coordinator-app name="media-entertainment-dw-coordinator"
+                 frequency="${coord:days(1)}"
+                 start="2026-01-01T02:00Z"
+                 end="2030-12-31T02:00Z"
+                 timezone="UTC"
+                 xmlns="uri:oozie:coordinator:0.4">
+
+    <description>
+        ========================================================================
+        Media and Entertainment Data Warehouse - Daily Coordinator Job
+        ========================================================================
+        Schedules daily batch ETL processing every day at 02:00 AM UTC.
+        Features:
+          - Data availability triggers for raw viewing telemetry &amp; interactions
+          - Verification of _SUCCESS flag before triggering the workflow
+          - Strict concurrency = 1 to prevent race conditions on dimension updates
+          - Execution order = FIFO with 120-minute SLA timeout window
+          - Parameter derivation for nominal and partition processing dates
+        ========================================================================
+    </description>
+
+    <!-- Execution and Concurrency Controls -->
+    <controls>
+        <!-- Pipeline timeout in minutes (2 hours = 120 mins). If inputs not ready, coordinator times out -->
+        <timeout>120</timeout>
+        <!-- Concurrency of 1 ensures strictly sequential runs to protect SCD dimension updates -->
+        <concurrency>1</concurrency>
+        <!-- FIFO execution policy processes backlog days in chronological order -->
+        <execution>FIFO</execution>
+        <!-- Throttle limit on maximum materialized coordinator actions waiting in queue -->
+        <throttle>2</throttle>
+    </controls>
+
+    <!-- Datasets Definition for Input and Output Data Availability Triggers -->
+    <datasets>
+        <!-- Daily Landing Dataset: Raw Video Player Telemetry & Viewing Logs -->
+        <dataset name="raw-viewing-logs"
+                 frequency="${coord:days(1)}"
+                 initial-instance="2026-01-01T00:00Z"
+                 timezone="UTC">
+            <uri-template>${nameNode}/data/landing/viewing_logs/${YEAR}-${MONTH}-${DAY}</uri-template>
+            <done-flag>_SUCCESS</done-flag>
+        </dataset>
+
+        <!-- Daily Landing Dataset: Raw User Interaction & Ratings Logs -->
+        <dataset name="raw-user-interactions"
+                 frequency="${coord:days(1)}"
+                 initial-instance="2026-01-01T00:00Z"
+                 timezone="UTC">
+            <uri-template>${nameNode}/data/landing/interactions/${YEAR}-${MONTH}-${DAY}</uri-template>
+            <done-flag>_SUCCESS</done-flag>
+        </dataset>
+
+        <!-- Output Curated Dataset: Fact Viewing Activity in Hive Warehouse -->
+        <dataset name="curated-fact-viewing"
+                 frequency="${coord:days(1)}"
+                 initial-instance="2026-01-01T00:00Z"
+                 timezone="UTC">
+            <uri-template>${nameNode}/warehouse/tablespace/external/hive/media_dw.db/fact_viewing_activity/event_date=${YEAR}-${MONTH}-${DAY}</uri-template>
+            <done-flag>_SUCCESS</done-flag>
+        </dataset>
+    </datasets>
+
+    <!-- Input Events: Workflow triggers ONLY when both landing datasets for previous day are available -->
+    <input-events>
+        <data-in name="viewingLogsInput" dataset="raw-viewing-logs">
+            <!-- Evaluates to the completed previous calendar day relative to the 2 AM nominal trigger -->
+            <instance>${coord:current(-1)}</instance>
+        </data-in>
+        <data-in name="interactionsInput" dataset="raw-user-interactions">
+            <instance>${coord:current(-1)}</instance>
+        </data-in>
+    </input-events>
+
+    <!-- Output Events: Documents the expected output target partition -->
+    <output-events>
+        <data-out name="factViewingOutput" dataset="curated-fact-viewing">
+            <instance>${coord:current(-1)}</instance>
+        </data-out>
+    </output-events>
+
+    <!-- Action Configuration: Invokes the Oozie Workflow with Dynamically Resolved Parameters -->
+    <action>
+        <workflow>
+            <app-path>${wfApplicationPath}</app-path>
+            <configuration>
+                <property>
+                    <name>jobTracker</name>
+                    <value>${jobTracker}</value>
+                </property>
+                <property>
+                    <name>nameNode</name>
+                    <value>${nameNode}</value>
+                </property>
+                <property>
+                    <name>queueName</name>
+                    <value>${queueName}</value>
+                </property>
+                <!-- Formats yesterday's date (YYYY-MM-DD) for which batch ingestion is executing -->
+                <property>
+                    <name>PROCESSING_DATE</name>
+                    <value>${coord:formatTime(coord:dateOffset(coord:nominalTime(), -1, 'DAY'), 'yyyy-MM-dd')}</value>
+                </property>
+                <property>
+                    <name>YEAR</name>
+                    <value>${coord:formatTime(coord:dateOffset(coord:nominalTime(), -1, 'DAY'), 'yyyy')}</value>
+                </property>
+                <property>
+                    <name>MONTH</name>
+                    <value>${coord:formatTime(coord:dateOffset(coord:nominalTime(), -1, 'DAY'), 'MM')}</value>
+                </property>
+                <property>
+                    <name>DAY</name>
+                    <value>${coord:formatTime(coord:dateOffset(coord:nominalTime(), -1, 'DAY'), 'dd')}</value>
+                </property>
+                <property>
+                    <name>INPUT_VIEWING_DIR</name>
+                    <value>${coord:dataIn('viewingLogsInput')}</value>
+                </property>
+                <property>
+                    <name>INPUT_INTERACTIONS_DIR</name>
+                    <value>${coord:dataIn('interactionsInput')}</value>
+                </property>
+                <property>
+                    <name>rdbmsJdbcUrl</name>
+                    <value>${rdbmsJdbcUrl}</value>
+                </property>
+                <property>
+                    <name>rdbmsUser</name>
+                    <value>${rdbmsUser}</value>
+                </property>
+                <property>
+                    <name>rdbmsPasswordHdfsPath</name>
+                    <value>${rdbmsPasswordHdfsPath}</value>
+                </property>
+                <property>
+                    <name>hive2JdbcUrl</name>
+                    <value>${hive2JdbcUrl}</value>
+                </property>
+                <property>
+                    <name>hiveDatabase</name>
+                    <value>${hiveDatabase}</value>
+                </property>
+                <property>
+                    <name>alertEmailSuccess</name>
+                    <value>${alertEmailSuccess}</value>
+                </property>
+                <property>
+                    <name>alertEmailFailure</name>
+                    <value>${alertEmailFailure}</value>
+                </property>
+            </configuration>
+        </workflow>
+    </action>
+
+</coordinator-app>

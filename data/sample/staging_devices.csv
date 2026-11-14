@@ -1,0 +1,17 @@
+device_id,device_type,brand,os_name,os_version,app_version
+1,Smart TV,Samsung,Tizen OS,7.0,5.4.1
+2,Smart TV,LG,webOS,23.1,5.3.8
+3,Smart TV,Sony,Android TV,12.0,5.4.0
+4,Streaming Stick,Apple,tvOS,17.4,5.4.2
+5,Streaming Stick,Roku,Roku OS,12.5,5.2.9
+6,Streaming Stick,Amazon,Fire OS,8.1,5.3.4
+7,Mobile,Apple,iOS,17.4,5.4.2
+8,Mobile,Samsung,Android,14.0,5.4.1
+9,Mobile,Google,Android,14.0,5.4.1
+10,Tablet,Apple,iPadOS,17.4,5.4.2
+11,Tablet,Samsung,Android,13.0,5.3.7
+12,Web Browser,Google Chrome,Windows 11,123.0,Web-3.2
+13,Web Browser,Apple Safari,macOS Sonoma,17.2,Web-3.2
+14,Web Browser,Mozilla Firefox,Ubuntu 22.04,124.0,Web-3.1
+15,Gaming Console,Sony PlayStation 5,PS5 OS,8.2,5.1.0
+16,Gaming Console,Microsoft Xbox Series X,Xbox OS,10.0,5.1.0

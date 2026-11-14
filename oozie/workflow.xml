@@ -1,0 +1,374 @@
+<workflow-app name="media-entertainment-dw-etl-pipeline" xmlns="uri:oozie:workflow:0.5">
+
+    <description>
+        ========================================================================
+        Media and Entertainment Data Warehouse - End-to-End ETL Pipeline
+        ========================================================================
+        Orchestrates daily ingestion, transformations, dimension/fact updates,
+        and automated data quality validations:
+          1. Parallel Sqoop imports from transactional RDBMS (Users, Content, Billing)
+          2. Sequential Pig ETL steps for viewing telemetry cleansing & interactions
+          3. Decision node for validation of cleansed files
+          4. Hive actions for Dimensional updates (SCD Type 1 & 2)
+          5. Hive actions for Partitioned & Bucketed Fact table population
+          6. Automated Shell execution of Data Quality Validation Suite
+          7. Decision node for DQ gatekeeper check
+          8. Comprehensive Email notifications and error handling via Kill nodes
+        ========================================================================
+    </description>
+
+    <!-- Global configuration applied across Hadoop actions -->
+    <global>
+        <job-tracker>${jobTracker}</job-tracker>
+        <name-node>${nameNode}</name-node>
+        <job-xml>${nameNode}/apps/media_dw/conf/hive-site.xml</job-xml>
+        <configuration>
+            <property>
+                <name>mapreduce.job.queuename</name>
+                <value>${queueName}</value>
+            </property>
+            <property>
+                <name>oozie.launcher.mapreduce.job.queuename</name>
+                <value>${queueName}</value>
+            </property>
+        </configuration>
+    </global>
+
+    <!-- Pipeline Entry Point -->
+    <start to="fork-sqoop-imports"/>
+
+    <!-- ==================================================================== -->
+    <!-- STAGE 1: PARALLEL SQOOP INGESTION FORK/JOIN                          -->
+    <!-- Ingests relational master and transactional data from upstream RDBMS -->
+    <!-- ==================================================================== -->
+    <fork name="fork-sqoop-imports">
+        <path start="sqoop-import-users"/>
+        <path start="sqoop-import-content"/>
+        <path start="sqoop-import-billing"/>
+    </fork>
+
+    <!-- Sqoop Action 1: Ingest Subscriber Accounts -->
+    <action name="sqoop-import-users">
+        <sqoop xmlns="uri:oozie:sqoop-action:0.4">
+            <job-tracker>${jobTracker}</job-tracker>
+            <name-node>${nameNode}</name-node>
+            <prepare>
+                <delete path="${nameNode}/data/staging/users/${PROCESSING_DATE}"/>
+                <mkdir path="${nameNode}/data/staging/users/${PROCESSING_DATE}"/>
+            </prepare>
+            <configuration>
+                <property>
+                    <name>mapreduce.job.queuename</name>
+                    <value>${queueName}</value>
+                </property>
+                <property>
+                    <name>mapreduce.job.user.classpath.first</name>
+                    <value>true</value>
+                </property>
+            </configuration>
+            <command>import --connect ${rdbmsJdbcUrl} --username ${rdbmsUser} --password-file ${rdbmsPasswordHdfsPath} --query "SELECT user_id, username, email, first_name, last_name, country, age_group, subscription_plan_id, registration_date, status, updated_at FROM subscribers WHERE updated_at &gt;= '${PROCESSING_DATE} 00:00:00' AND updated_at &lt;= '${PROCESSING_DATE} 23:59:59' AND \$CONDITIONS" --target-dir ${nameNode}/data/staging/users/${PROCESSING_DATE} --split-by user_id --num-mappers 4 --fields-terminated-by "\t" --null-string "\\N" --null-non-string "\\N"</command>
+        </sqoop>
+        <ok to="join-sqoop-imports"/>
+        <error to="email-failure-notification"/>
+    </action>
+
+    <!-- Sqoop Action 2: Ingest Media Content & Title Catalog -->
+    <action name="sqoop-import-content">
+        <sqoop xmlns="uri:oozie:sqoop-action:0.4">
+            <job-tracker>${jobTracker}</job-tracker>
+            <name-node>${nameNode}</name-node>
+            <prepare>
+                <delete path="${nameNode}/data/staging/content/${PROCESSING_DATE}"/>
+                <mkdir path="${nameNode}/data/staging/content/${PROCESSING_DATE}"/>
+            </prepare>
+            <configuration>
+                <property>
+                    <name>mapreduce.job.queuename</name>
+                    <value>${queueName}</value>
+                </property>
+            </configuration>
+            <command>import --connect ${rdbmsJdbcUrl} --username ${rdbmsUser} --password-file ${rdbmsPasswordHdfsPath} --query "SELECT content_id, title, content_type, genre, release_year, duration_sec, content_rating, studio, language, series_title, season_num, episode_num, updated_at FROM media_catalog WHERE \$CONDITIONS" --target-dir ${nameNode}/data/staging/content/${PROCESSING_DATE} --split-by content_id --num-mappers 4 --fields-terminated-by "\t" --null-string "\\N" --null-non-string "\\N"</command>
+        </sqoop>
+        <ok to="join-sqoop-imports"/>
+        <error to="email-failure-notification"/>
+    </action>
+
+    <!-- Sqoop Action 3: Ingest Subscription Billing Transactions -->
+    <action name="sqoop-import-billing">
+        <sqoop xmlns="uri:oozie:sqoop-action:0.4">
+            <job-tracker>${jobTracker}</job-tracker>
+            <name-node>${nameNode}</name-node>
+            <prepare>
+                <delete path="${nameNode}/data/staging/billing/${PROCESSING_DATE}"/>
+                <mkdir path="${nameNode}/data/staging/billing/${PROCESSING_DATE}"/>
+            </prepare>
+            <configuration>
+                <property>
+                    <name>mapreduce.job.queuename</name>
+                    <value>${queueName}</value>
+                </property>
+            </configuration>
+            <command>import --connect ${rdbmsJdbcUrl} --username ${rdbmsUser} --password-file ${rdbmsPasswordHdfsPath} --query "SELECT transaction_id, user_id, plan_id, billing_date, amount_billed_usd, discount_usd, tax_usd, payment_method, payment_status FROM billing_transactions WHERE billing_date = '${PROCESSING_DATE}' AND \$CONDITIONS" --target-dir ${nameNode}/data/staging/billing/${PROCESSING_DATE} --split-by transaction_id --num-mappers 4 --fields-terminated-by "\t" --null-string "\\N" --null-non-string "\\N"</command>
+        </sqoop>
+        <ok to="join-sqoop-imports"/>
+        <error to="email-failure-notification"/>
+    </action>
+
+    <!-- Join node synchronizing parallel Sqoop extraction jobs -->
+    <join name="join-sqoop-imports" to="pig-cleanse-viewing-logs"/>
+
+    <!-- ==================================================================== -->
+    <!-- STAGE 2: SEQUENTIAL PIG TRANSFORMATION STEPS                         -->
+    <!-- Cleansing, sessionization, deduplication, and anomaly filtering      -->
+    <!-- ==================================================================== -->
+
+    <!-- Pig Action 1: Cleanse & Sessionize Viewing Activity Logs -->
+    <action name="pig-cleanse-viewing-logs">
+        <pig>
+            <job-tracker>${jobTracker}</job-tracker>
+            <name-node>${nameNode}</name-node>
+            <prepare>
+                <delete path="${nameNode}/data/cleansed/viewing_logs/${PROCESSING_DATE}"/>
+            </prepare>
+            <configuration>
+                <property>
+                    <name>mapreduce.job.queuename</name>
+                    <value>${queueName}</value>
+                </property>
+                <property>
+                    <name>pig.cachedbag.memusage</name>
+                    <value>0.2</value>
+                </property>
+            </configuration>
+            <script>${nameNode}/apps/media_dw/pig/cleanse_viewing_logs.pig</script>
+            <param>INPUT_PATH=${nameNode}/data/landing/viewing_logs/${PROCESSING_DATE}</param>
+            <param>OUTPUT_PATH=${nameNode}/data/cleansed/viewing_logs/${PROCESSING_DATE}</param>
+            <param>PROCESSING_DATE=${PROCESSING_DATE}</param>
+            <file>${nameNode}/apps/media_dw/pig/udfs/media-dw-pig-udfs.jar#media-dw-pig-udfs.jar</file>
+        </pig>
+        <ok to="pig-transform-interactions"/>
+        <error to="email-failure-notification"/>
+    </action>
+
+    <!-- Pig Action 2: Transform & Normalize User Engagements & Ratings -->
+    <action name="pig-transform-interactions">
+        <pig>
+            <job-tracker>${jobTracker}</job-tracker>
+            <name-node>${nameNode}</name-node>
+            <prepare>
+                <delete path="${nameNode}/data/cleansed/interactions/${PROCESSING_DATE}"/>
+            </prepare>
+            <configuration>
+                <property>
+                    <name>mapreduce.job.queuename</name>
+                    <value>${queueName}</value>
+                </property>
+            </configuration>
+            <script>${nameNode}/apps/media_dw/pig/transform_interactions.pig</script>
+            <param>INPUT_PATH=${nameNode}/data/landing/interactions/${PROCESSING_DATE}</param>
+            <param>OUTPUT_PATH=${nameNode}/data/cleansed/interactions/${PROCESSING_DATE}</param>
+            <param>PROCESSING_DATE=${PROCESSING_DATE}</param>
+        </pig>
+        <ok to="check-pig-cleansing-status"/>
+        <error to="email-failure-notification"/>
+    </action>
+
+    <!-- ==================================================================== -->
+    <!-- STAGE 3: DECISION NODE FOR CLEANSING VALIDATION                      -->
+    <!-- Conditional verification that output datasets exist and are ready   -->
+    <!-- ==================================================================== -->
+    <decision name="check-pig-cleansing-status">
+        <switch>
+            <case to="hive-load-dimensions">
+                ${fs:exists(concat(nameNode, '/data/cleansed/viewing_logs/', PROCESSING_DATE, '/_SUCCESS')) and
+                  fs:exists(concat(nameNode, '/data/cleansed/interactions/', PROCESSING_DATE, '/_SUCCESS'))}
+            </case>
+            <default to="email-failure-notification"/>
+        </switch>
+    </decision>
+
+    <!-- ==================================================================== -->
+    <!-- STAGE 4: HIVE DIMENSION PROCESSING                                   -->
+    <!-- Slowly Changing Dimensions (SCD Type 1 & 2) Maintenance              -->
+    <!-- ==================================================================== -->
+    <action name="hive-load-dimensions">
+        <hive2 xmlns="uri:oozie:hive2-action:0.2">
+            <job-tracker>${jobTracker}</job-tracker>
+            <name-node>${nameNode}</name-node>
+            <jdbc-url>${hive2JdbcUrl}</jdbc-url>
+            <configuration>
+                <property>
+                    <name>mapreduce.job.queuename</name>
+                    <value>${queueName}</value>
+                </property>
+                <property>
+                    <name>hive.execution.engine</name>
+                    <value>tez</value>
+                </property>
+                <property>
+                    <name>hive.vectorized.execution.enabled</name>
+                    <value>true</value>
+                </property>
+                <property>
+                    <name>hive.exec.dynamic.partition.mode</name>
+                    <value>nonstrict</value>
+                </property>
+            </configuration>
+            <script>${nameNode}/apps/media_dw/hive/load_dimensions.hql</script>
+            <param>PROCESSING_DATE=${PROCESSING_DATE}</param>
+            <param>HIVE_DB=${hiveDatabase}</param>
+        </hive2>
+        <ok to="hive-load-facts"/>
+        <error to="email-failure-notification"/>
+    </action>
+
+    <!-- ==================================================================== -->
+    <!-- STAGE 5: HIVE FACT LOADING (PARTITIONED & BUCKETED)                  -->
+    <!-- Surrogate Key Lookup and Partitioned Fact Table Insertions           -->
+    <!-- ==================================================================== -->
+    <action name="hive-load-facts">
+        <hive2 xmlns="uri:oozie:hive2-action:0.2">
+            <job-tracker>${jobTracker}</job-tracker>
+            <name-node>${nameNode}</name-node>
+            <jdbc-url>${hive2JdbcUrl}</jdbc-url>
+            <configuration>
+                <property>
+                    <name>mapreduce.job.queuename</name>
+                    <value>${queueName}</value>
+                </property>
+                <property>
+                    <name>hive.execution.engine</name>
+                    <value>tez</value>
+                </property>
+                <property>
+                    <name>hive.exec.compress.output</name>
+                    <value>true</value>
+                </property>
+                <property>
+                    <name>hive.enforce.bucketing</name>
+                    <value>true</value>
+                </property>
+                <property>
+                    <name>hive.optimize.bucketmapjoin</name>
+                    <value>true</value>
+                </property>
+                <property>
+                    <name>hive.optimize.bucketmapjoin.sortedmerge</name>
+                    <value>true</value>
+                </property>
+            </configuration>
+            <script>${nameNode}/apps/media_dw/hive/load_facts.hql</script>
+            <param>PROCESSING_DATE=${PROCESSING_DATE}</param>
+            <param>HIVE_DB=${hiveDatabase}</param>
+        </hive2>
+        <ok to="run-data-quality-checks"/>
+        <error to="email-failure-notification"/>
+    </action>
+
+    <!-- ==================================================================== -->
+    <!-- STAGE 6: DATA QUALITY VALIDATION SUITE                               -->
+    <!-- Runs shell script for row counts, nulls, duplicates & referential IK -->
+    <!-- ==================================================================== -->
+    <action name="run-data-quality-checks">
+        <shell xmlns="uri:oozie:shell-action:0.3">
+            <job-tracker>${jobTracker}</job-tracker>
+            <name-node>${nameNode}</name-node>
+            <configuration>
+                <property>
+                    <name>mapreduce.job.queuename</name>
+                    <value>${queueName}</value>
+                </property>
+            </configuration>
+            <exec>data_quality_checks.sh</exec>
+            <argument>--date</argument>
+            <argument>${PROCESSING_DATE}</argument>
+            <argument>--hive-db</argument>
+            <argument>${hiveDatabase}</argument>
+            <argument>--report-dir</argument>
+            <argument>/var/log/media_dw/dq_reports</argument>
+            <file>${nameNode}/apps/media_dw/scripts/data_quality_checks.sh#data_quality_checks.sh</file>
+            <capture-output/>
+        </shell>
+        <ok to="check-dq-results"/>
+        <error to="email-failure-notification"/>
+    </action>
+
+    <!-- Decision node checking data quality validation results -->
+    <decision name="check-dq-results">
+        <switch>
+            <case to="email-success-notification">
+                ${wf:actionData('run-data-quality-checks')['DQ_STATUS'] eq 'PASS'}
+            </case>
+            <default to="email-failure-notification"/>
+        </switch>
+    </decision>
+
+    <!-- ==================================================================== -->
+    <!-- STAGE 7: NOTIFICATIONS & PIPELINE TERMINATION                        -->
+    <!-- ==================================================================== -->
+
+    <!-- Email Action: Pipeline Succeeded -->
+    <action name="email-success-notification">
+        <email xmlns="uri:oozie:email-action:0.2">
+            <to>${alertEmailSuccess}</to>
+            <subject>[SUCCESS] Media &amp; Entertainment DW Daily ETL - ${PROCESSING_DATE}</subject>
+            <body>
+Media &amp; Entertainment Data Warehouse ETL Pipeline completed successfully.
+
+Workflow Details:
+- Workflow ID: ${wf:id()}
+- Workflow Name: ${wf:name()}
+- Processing Date: ${PROCESSING_DATE}
+- Execution User: ${wf:user()}
+- End Time: ${wf:lastErrorNode()}
+
+Stages Completed:
+1. Parallel Sqoop Master Data Ingestion [PASS]
+2. Pig Viewing Telemetry Cleansing &amp; Sessionization [PASS]
+3. Pig User Interaction Cleansing [PASS]
+4. Hive Dimension Updates (SCD Type 1 &amp; 2) [PASS]
+5. Hive Fact Partitioned &amp; Bucketed Insertion [PASS]
+6. Data Quality Validation Suite: ${wf:actionData('run-data-quality-checks')['DQ_STATUS']}
+
+The Data Marts and BI Dashboards are refreshed and available for consumption.
+            </body>
+        </email>
+        <ok to="end-workflow"/>
+        <error to="end-workflow"/>
+    </action>
+
+    <!-- Email Action: Pipeline Failed -->
+    <action name="email-failure-notification">
+        <email xmlns="uri:oozie:email-action:0.2">
+            <to>${alertEmailFailure}</to>
+            <subject>[CRITICAL ALERT] Media DW ETL Failed - ${PROCESSING_DATE}</subject>
+            <body>
+CRITICAL: The Media &amp; Entertainment Data Warehouse ETL pipeline has failed.
+
+Failure Context:
+- Workflow ID: ${wf:id()}
+- Failed Node: ${wf:lastErrorNode()}
+- Error Code: ${wf:errorCode(wf:lastErrorNode())}
+- Error Message: ${wf:errorMessage(wf:lastErrorNode())}
+- Processing Partition Date: ${PROCESSING_DATE}
+
+Action Required:
+1. Check Oozie job logs: oozie job -info ${wf:id()} -log
+2. Check YARN container logs for node: ${wf:lastErrorNode()}
+3. Review Data Quality report if the error occurred at 'check-dq-results'
+4. Remediate corrupt data in landing zone if applicable and re-run pipeline.
+            </body>
+        </email>
+        <ok to="kill-workflow"/>
+        <error to="kill-workflow"/>
+    </action>
+
+    <!-- Workflow Kill Node -->
+    <kill name="kill-workflow">
+        <message>ETL Pipeline failed at node [${wf:lastErrorNode()}], error message [${wf:errorMessage(wf:lastErrorNode())}]</message>
+    </kill>
+
+    <!-- Normal Pipeline Completion -->
+    <end name="end-workflow"/>
+
+</workflow-app>

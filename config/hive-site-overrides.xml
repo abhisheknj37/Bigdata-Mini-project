@@ -1,0 +1,457 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+<!-- ===========================================================================
+     File Name   : hive-site-overrides.xml
+     Description : Production Hive Engine Performance Configuration Overrides
+                   optimized for the Media and Entertainment Data Warehouse.
+     Focus Areas :
+       1. Apache Tez Execution Engine & Dynamic Graph Sizing
+       2. Optimized Row Columnar (ORC) Storage Format Tuning
+       3. Vectorized Query Execution (SIMD Instruction Pipelines)
+       4. Calcite Cost-Based Optimizer (CBO) & Statistics Gathering
+       5. Dynamic Partitioning for Time-Series Media Consumption Logs
+       6. In-Memory MapJoin Conversion, File Merging, & Small File Prevention
+     Author      : Big Data Engineering Team
+     Version     : 2.1.0
+============================================================================ -->
+
+<configuration>
+
+  <!-- =======================================================================
+       SECTION 1: APACHE TEZ EXECUTION ENGINE CONFIGURATIONS
+       ======================================================================= -->
+
+  <property>
+    <name>hive.execution.engine</name>
+    <value>tez</value>
+    <description>
+      Enables Apache Tez DAG execution engine over legacy MapReduce, eliminating
+      intermediate HDFS write barriers between query stages and reducing query latency by 3x-10x.
+    </description>
+  </property>
+
+  <property>
+    <name>hive.tez.container.size</name>
+    <value>8192</value>
+    <description>
+      Allocates 8192 MB (8 GB) per YARN container for Tez tasks, providing sufficient headroom
+      for heavy hash joins, co-viewing similarity calculations, and skew buffers.
+    </description>
+  </property>
+
+  <property>
+    <name>hive.tez.java.opts</name>
+    <value>-Xmx6553m -XX:+UseG1GC -XX:InitiatingHeapOccupancyPercent=45 -XX:G1ReservePercent=15</value>
+    <description>
+      JVM heap flags (80% of container size) paired with G1GC to prevent stop-the-world
+      GC pauses during massive multi-way dimension joins.
+    </description>
+  </property>
+
+  <property>
+    <name>tez.runtime.io.sort.mb</name>
+    <value>1600</value>
+    <description>
+      Allocates 1600 MB of buffer memory for sorting mapper and reducer intermediate outputs
+      prior to spilling to disk. Minimizes multi-pass merge spill cycles.
+    </description>
+  </property>
+
+  <property>
+    <name>tez.runtime.unordered.output.buffer.size-mb</name>
+    <value>400</value>
+    <description>
+      Memory buffer for unordered partition-to-partition data transfers in broadcast/map joins.
+    </description>
+  </property>
+
+  <property>
+    <name>hive.tez.auto.reducer.parallelism</name>
+    <value>true</value>
+    <description>
+      Enables dynamic reducer estimation at runtime based on the actual physical bytes
+      flowing through upstream vertices. Prevents over-partitioning and reducer starvation.
+    </description>
+  </property>
+
+  <property>
+    <name>hive.tez.min.partition.factor</name>
+    <value>0.25</value>
+    <description>
+      Lower bound scaling multiplier for automatically determined Tez reducers.
+    </description>
+  </property>
+
+  <property>
+    <name>hive.tez.max.partition.factor</name>
+    <value>2.0</value>
+    <description>
+      Upper bound scaling multiplier for automatically determined Tez reducers.
+    </description>
+  </property>
+
+  <!-- =======================================================================
+       SECTION 2: OPTIMIZED ROW COLUMNAR (ORC) STORAGE TUNING
+       ======================================================================= -->
+
+  <property>
+    <name>hive.default.fileformat</name>
+    <value>ORC</value>
+    <description>
+      Sets ORC as the default file format for all new managed and external warehouse tables.
+    </description>
+  </property>
+
+  <property>
+    <name>hive.exec.orc.default.stripe.size</name>
+    <value>268435456</value>
+    <description>
+      Sets ORC stripe size to 256 MB (268435456 bytes), enabling large columnar chunks
+      for high-throughput sequential reading of media view history and telemetry facts.
+    </description>
+  </property>
+
+  <property>
+    <name>hive.exec.orc.default.block.size</name>
+    <value>268435456</value>
+    <description>
+      Matches HDFS block size to the ORC stripe size (256 MB) ensuring 1:1 alignment
+      between HDFS blocks and ORC stripes, eliminating remote network block reads.
+    </description>
+  </property>
+
+  <property>
+    <name>hive.exec.orc.default.compress</name>
+    <value>SNAPPY</value>
+    <description>
+      Uses Snappy compression for balanced decompression velocity and CPU utilization,
+      ideal for interactive BI dashboard queries and ad hoc analytics.
+    </description>
+  </property>
+
+  <property>
+    <name>hive.exec.orc.encoding.strategy</name>
+    <value>SPEED</value>
+    <description>
+      Prioritizes CPU encoding speed over extreme dictionary compression for fast ETL ingestion.
+    </description>
+  </property>
+
+  <property>
+    <name>hive.exec.orc.compression.strategy</name>
+    <value>SPEED</value>
+    <description>
+      Optimizes compression algorithms for query response latency and ingestion throughput.
+    </description>
+  </property>
+
+  <property>
+    <name>hive.orc.row.index.stride</name>
+    <value>10000</value>
+    <description>
+      Stores lightweight min/max/null indexes every 10,000 rows. Enables precise row-group
+      skipping on timestamp and identifier predicate filters (predicate pushdown).
+    </description>
+  </property>
+
+  <property>
+    <name>hive.exec.orc.split.strategy</name>
+    <value>HYBRID</value>
+    <description>
+      Hybrid split generation leverages ETLSplitStrategy for large files (parallel footer parsing)
+      and BI SplitStrategy for small files to minimize split planning overhead.
+    </description>
+  </property>
+
+  <property>
+    <name>hive.orc.compute.splits.num.threads</name>
+    <value>20</value>
+    <description>
+      Number of background threads allocated for concurrent ORC footer split calculation.
+    </description>
+  </property>
+
+  <property>
+    <name>hive.orc.cache.stripe.details.size</name>
+    <value>10000</value>
+    <description>
+      Caches ORC stripe metadata in memory across queries to avoid repetitive NameNode trips.
+    </description>
+  </property>
+
+  <!-- =======================================================================
+       SECTION 3: VECTORIZED QUERY EXECUTION SETTINGS
+       ======================================================================= -->
+
+  <property>
+    <name>hive.vectorized.execution.enabled</name>
+    <value>true</value>
+    <description>
+      Enables vectorized query execution, processing rows in batches of 1,024 records using
+      CPU SIMD instructions instead of row-by-row iteration.
+    </description>
+  </property>
+
+  <property>
+    <name>hive.vectorized.execution.reduce.enabled</name>
+    <value>true</value>
+    <description>
+      Extends vectorized processing to reduce tasks (aggregations, joins, window functions).
+    </description>
+  </property>
+
+  <property>
+    <name>hive.vectorized.execution.reduce.groupby.enabled</name>
+    <value>true</value>
+    <description>
+      Enables vectorized hash aggregation on reduce operators for GROUP BY queries.
+    </description>
+  </property>
+
+  <property>
+    <name>hive.vectorized.execution.mapjoin.native.enabled</name>
+    <value>true</value>
+    <description>
+      Enables native vectorized fast hash join operator for broadcast joins.
+    </description>
+  </property>
+
+  <property>
+    <name>hive.vectorized.use.row.serde.deserialize</name>
+    <value>true</value>
+    <description>
+      Allows vectorization even when underlying data passes through SerDe conversion layers.
+    </description>
+  </property>
+
+  <property>
+    <name>hive.vectorized.use.vectorized.input.format</name>
+    <value>true</value>
+    <description>
+      Leverages native ORC vectorized reader to read columnar batches directly into vectorized row batches.
+    </description>
+  </property>
+
+  <property>
+    <name>hive.vectorized.adaptor.usage.mode</name>
+    <value>chosen</value>
+    <description>
+      Dynamically chooses vectorization adaptors when operators support partial vectorized evaluation.
+    </description>
+  </property>
+
+  <!-- =======================================================================
+       SECTION 4: COST-BASED OPTIMIZER (CBO) & STATISTICS GATHERING
+       ======================================================================= -->
+
+  <property>
+    <name>hive.cbo.enable</name>
+    <value>true</value>
+    <description>
+      Enables Apache Calcite Cost-Based Optimizer (CBO) to determine optimal multi-table
+      join ordering, filter pushdowns, and partition pruning.
+    </description>
+  </property>
+
+  <property>
+    <name>hive.compute.query.using.stats</name>
+    <value>true</value>
+    <description>
+      Answers metadata-driven queries (e.g., SELECT COUNT(*), MIN(dt), MAX(dt)) directly
+      from Metastore statistics without launching MapReduce/Tez tasks.
+    </description>
+  </property>
+
+  <property>
+    <name>hive.stats.autogather</name>
+    <value>true</value>
+    <description>
+      Automatically generates table and partition statistics during INSERT INTO / INSERT OVERWRITE jobs.
+    </description>
+  </property>
+
+  <property>
+    <name>hive.stats.column.autogather</name>
+    <value>true</value>
+    <description>
+      Automatically captures column-level NDV (Number of Distinct Values), null counts,
+      and min/max values for exact CBO cost modeling.
+    </description>
+  </property>
+
+  <property>
+    <name>hive.stats.fetch.column.stats</name>
+    <value>true</value>
+    <description>
+      Directs the CBO planner to fetch column stats from the Metastore for join selectivity calculation.
+    </description>
+  </property>
+
+  <property>
+    <name>hive.stats.fetch.partition.stats</name>
+    <value>true</value>
+    <description>
+      Directs the CBO planner to fetch partition-level row counts and byte sizes.
+    </description>
+  </property>
+
+  <!-- =======================================================================
+       SECTION 5: DYNAMIC PARTITIONING SETTINGS
+       ======================================================================= -->
+
+  <property>
+    <name>hive.exec.dynamic.partition</name>
+    <value>true</value>
+    <description>
+      Permits dynamic creation of Hive partitions at query runtime based on column expressions.
+    </description>
+  </property>
+
+  <property>
+    <name>hive.exec.dynamic.partition.mode</name>
+    <value>nonstrict</value>
+    <description>
+      Allows dynamic partitioning across all partition columns without requiring at least one
+      static partition column in the INSERT statement.
+    </description>
+  </property>
+
+  <property>
+    <name>hive.exec.max.dynamic.partitions</name>
+    <value>5000</value>
+    <description>
+      Total maximum dynamic partitions that can be created by a single Hive query across the cluster.
+    </description>
+  </property>
+
+  <property>
+    <name>hive.exec.max.dynamic.partitions.pernode</name>
+    <value>2000</value>
+    <description>
+      Maximum dynamic partitions that can be created per individual cluster TaskTracker/NodeManager.
+    </description>
+  </property>
+
+  <property>
+    <name>hive.exec.max.created.files</name>
+    <value>100000</value>
+    <description>
+      Maximum number of physical HDFS files that can be created by a single ETL dynamic partition job.
+    </description>
+  </property>
+
+  <property>
+    <name>hive.error.on.empty.partition</name>
+    <value>false</value>
+    <description>
+      Prevents query failure if a dynamic partition evaluation returns zero matching rows.
+    </description>
+  </property>
+
+  <!-- =======================================================================
+       SECTION 6: MEMORY, BROADCAST MAPJOIN & SMALL FILE COMPACTION
+       ======================================================================= -->
+
+  <property>
+    <name>hive.auto.convert.join</name>
+    <value>true</value>
+    <description>
+      Automatically converts common shuffle joins into high-speed broadcast MapJoins
+      when small dimension tables are joined with massive fact tables.
+    </description>
+  </property>
+
+  <property>
+    <name>hive.auto.convert.join.noconditionaltask</name>
+    <value>true</value>
+    <description>
+      Enables non-conditional task generation for MapJoins when total size of joined tables
+      falls within the noconditionaltask threshold.
+    </description>
+  </property>
+
+  <property>
+    <name>hive.auto.convert.join.noconditionaltask.size</name>
+    <value>536870912</value>
+    <description>
+      Sets the broadcast MapJoin threshold to 512 MB (536870912 bytes). Dimensions up to 512 MB
+      (e.g., content catalog, channels, device lookup) are broadcast into memory, skipping shuffle.
+    </description>
+  </property>
+
+  <property>
+    <name>hive.mapjoin.smalltable.filesize</name>
+    <value>25000000</value>
+    <description>
+      Legacy fallback threshold (25 MB) for small table classification in MapJoins.
+    </description>
+  </property>
+
+  <!-- Small File Merging Prevention -->
+  <property>
+    <name>hive.merge.mapfiles</name>
+    <value>true</value>
+    <description>
+      Merges small files at the end of a map-only job to prevent HDFS NameNode inode saturation.
+    </description>
+  </property>
+
+  <property>
+    <name>hive.merge.mapredfiles</name>
+    <value>true</value>
+    <description>
+      Merges small files at the end of a MapReduce / Tez job.
+    </description>
+  </property>
+
+  <property>
+    <name>hive.merge.tezfiles</name>
+    <value>true</value>
+    <description>
+      Merges small files produced at the final sink vertex of a Tez DAG.
+    </description>
+  </property>
+
+  <property>
+    <name>hive.merge.size.per.task</name>
+    <value>268435456</value>
+    <description>
+      Target merged file size of 256 MB (matching HDFS block and ORC stripe size).
+    </description>
+  </property>
+
+  <property>
+    <name>hive.merge.smallfiles.avgsize</name>
+    <value>134217728</value>
+    <description>
+      Triggers merge task if the average output file size in a partition is less than 128 MB.
+    </description>
+  </property>
+
+  <!-- Parallel Execution -->
+  <property>
+    <name>hive.exec.parallel</name>
+    <value>true</value>
+    <description>
+      Executes independent stages of a query tree in parallel (e.g. subqueries, multi-insert joins).
+    </description>
+  </property>
+
+  <property>
+    <name>hive.exec.parallel.thread.number</name>
+    <value>16</value>
+    <description>
+      Allows up to 16 independent query stages to execute concurrently within a single DAG session.
+    </description>
+  </property>
+
+  <!-- HiveServer2 Concurrency -->
+  <property>
+    <name>hive.server2.thrift.max.worker.threads</name>
+    <value>500</value>
+    <description>
+      Allocates worker threads for HiveServer2 to comfortably serve concurrent BI and ETL connections.
+    </description>
+  </property>
+
+</configuration>

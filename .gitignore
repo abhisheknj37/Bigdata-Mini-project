@@ -4,3 +4,6 @@ frontend/dist/
 __pycache__/
 *.pyc
 uploads/*
+.env
+.env.*
+!.env.example

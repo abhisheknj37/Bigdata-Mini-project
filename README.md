@@ -36,6 +36,10 @@ Open http://localhost:5173.
 
 Local demo credentials: `admin / Admin@123` and `analyst / Analyst@123`. These are for local development only and are not used by the production deployment.
 
+## Live links
+- **Live dashboard:** https://mediavault-dashboard-a-star-codes.vercel.app
+- **Portfolio:** https://abhisheknj37-portfolio.vercel.app
+
 ## Deploy
 
 ### 1. Flask API on Render

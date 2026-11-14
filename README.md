@@ -1,75 +1,73 @@
-# Media & Entertainment Data Warehouse — Full-stack mini project
+# Media & Entertainment Data Warehouse
 
-A dark analytics dashboard with React frontend, Python Flask REST API, SQLite local warehouse mode, and the existing Hadoop/Hive ecosystem scripts from the supplied starter project.
+A full-stack analytics dashboard built with React, Flask, SQLite and a set of Hadoop ecosystem artifacts. It demonstrates a media warehouse workflow with sample datasets, dimensional modelling, streaming-quality metrics and role-based access.
 
 ## Features
-- Role-based demo access: Admin and Analyst.
-- KPI dashboard, content/genre analytics, subscription and revenue views, streaming QoE table.
+- Admin and Analyst access with signed, expiring JWT authentication.
+- KPI dashboard, content and genre analytics, subscriptions, revenue and streaming QoE.
 - Admin-only CSV upload and local ETL pipeline execution.
-- Hadoop artifact status page for Hive, Pig, Java MapReduce, Sqoop and Oozie.
-- Includes original sample datasets, Hive DDL/ETL/analytics, Pig scripts, MapReduce Java source and Oozie workflow files.
+- Hadoop/Hive, Pig, Java MapReduce, Sqoop and Oozie artifacts.
+- SQLite local simulator and sample CSV data.
 
-## Requirements
-- Python 3.10+ recommended
-- Node.js 18+ and npm
-- VS Code
-- Optional: a separately configured Hadoop/Hive cluster for distributed execution
+## Tech stack
+- Frontend: React 18, Vite, Axios, Chart.js.
+- Backend: Python, Flask, Flask-CORS, PyJWT, Gunicorn.
+- Warehouse: SQLite; sample ETL builds staging, dimension and fact tables.
 
-## Run in VS Code (Windows PowerShell)
-Open this folder in VS Code. Use two terminals.
+## Run locally
 
-### Terminal 1 — backend
-```powershell
+Backend (terminal 1):
+```bash
 cd backend
 python -m venv .venv
-.venv\Scripts\Activate.ps1
+# Windows: .venv\\Scripts\\activate
+# macOS/Linux: source .venv/bin/activate
 pip install -r requirements.txt
 python app.py
 ```
-Backend runs at `http://127.0.0.1:5000`.
 
-### Terminal 2 — frontend
-```powershell
+Frontend (terminal 2):
+```bash
 cd frontend
 npm install
 npm run dev
 ```
-Open `http://127.0.0.1:5173`.
+Open http://localhost:5173.
 
-### Demo accounts
-| Role | Username | Password |
-|---|---|---|
-| Admin | `admin` | `Admin@123` |
-| Analyst | `analyst` | `Analyst@123` |
+Local demo credentials: `admin / Admin@123` and `analyst / Analyst@123`. These are for local development only and are not used by the production deployment.
 
-Admin can run the pipeline and upload CSV files. Analyst can view dashboard analytics. After uploading one of the recognized staging CSV files, run the pipeline again to refresh the warehouse.
+## Deploy
 
-## Local data pipeline
-The dashboard's **Run pipeline** button executes:
-```powershell
-python scripts\run_local_warehouse.py
-```
-It rebuilds `data/media_warehouse.db` from `data/sample/*.csv` and creates staging, dimension and fact tables. This is the runnable local demonstration mode.
+### 1. Flask API on Render
+Create a Python web service connected to this repository:
+- Build command: `pip install -r backend/requirements.txt`
+- Start command: `cd backend && gunicorn app:app --bind 0.0.0.0:$PORT`
+- Region: Singapore (or the nearest available region).
+- Set environment variables:
+  - `APP_ENV=production`
+  - `JWT_SECRET_KEY` = a unique random secret (at least 32 random bytes).
+  - `ADMIN_USERNAME=admin`
+  - `ADMIN_PASSWORD` = a strong private password.
+  - `ANALYST_USERNAME=analyst`
+  - `ANALYST_PASSWORD` = a separate strong private password.
+  - `CORS_ORIGINS` = the deployed Vercel frontend origin, e.g. `https://your-project.vercel.app`.
+- The free Render filesystem is ephemeral. Uploaded files and changes to the SQLite database may be lost when the service restarts or redeploys. Use persistent storage or a managed database for production data.
 
-## Hadoop / Hive mode
-The project contains the Hadoop ecosystem artifacts in `config/`, `hive/`, `pig/`, `mapreduce/`, `sqoop/`, and `oozie/`. Review `docs/run_guide.md` and `docs/architecture.md` before cluster execution. The dashboard reports that scripts are present; it does **not** claim a cluster is connected. A real cluster requires Hadoop/HDFS, Hive Metastore/Server2, Java/Hadoop client configuration, HDFS paths, JDBC drivers/credentials for Sqoop, and Oozie configuration. Run the supplied HQL/Pig/MapReduce/Oozie commands in that configured environment.
+### 2. React frontend on Vercel
+- Import this GitHub repository: https://github.com/abhisheknj37/Bigdata-Mini-project
+- Root Directory: `frontend`
+- Framework: Vite
+- Build command: `npm run build`
+- Output directory: `dist`
+- Add environment variable `VITE_API_URL` with the Render service origin (without `/api`).
 
-## Architecture
-```text
-React + Chart.js (5173)
-        | REST / JSON
-        v
-Flask API (5000) ---- Admin auth / upload / pipeline trigger
-        |
-        v
-SQLite local warehouse <--- Python CSV ETL simulator
-        ^
-        |
-Hadoop/HDFS + Hive + Pig + MapReduce + Sqoop + Oozie
-(cluster mode; configure separately)
-```
+## Data pipeline and Hadoop notes
+The **Run pipeline** button executes `scripts/run_local_warehouse.py`, which rebuilds `data/media_warehouse.db` from `data/sample/*.csv`. This is a local SQLite demonstration, not distributed Hadoop execution.
 
-## Important academic / security notes
-- Demo credentials and the simple bearer token are for a local mini-project demonstration only. Do not expose this build to the public internet as-is.
-- Before real deployment, implement JWT or secure server sessions, password rotation, HTTPS, restrictive CORS, upload validation, and proper role persistence.
-- The local mode is a functional simulator, not a substitute for distributed Hadoop execution. Do not claim Hive/MapReduce ran unless you execute them on a working cluster.
+The repository includes Hadoop/Hive, Pig, MapReduce, Sqoop and Oozie source artifacts. A real cluster must be configured and operated separately before claiming those distributed jobs have run.
+
+## Security notes
+- JWTs are signed with an environment-provided secret and expire after eight hours.
+- Roles are loaded from the database on each authenticated request; role values in client tokens are not trusted.
+- Production demo passwords must be supplied as private Render environment variables.
+- Use a managed database, persistent storage, HTTPS and a review of upload limits/validation before using this as a real business service.

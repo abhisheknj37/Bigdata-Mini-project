@@ -1,77 +1,124 @@
-# Media & Entertainment Data Warehouse
+# Design and Implementation of Data Warehousing Solution for Media and Entertainment on Hadoop Ecosystem
 
-A full-stack analytics dashboard built with React, Flask, SQLite and a set of Hadoop ecosystem artifacts. It demonstrates a media warehouse workflow with sample datasets, dimensional modelling, streaming-quality metrics and role-based access.
+A student-scale Big Data data-warehousing project for OTT/media platforms. It uses viewing activity, content catalogue, subscriber, device and billing datasets to demonstrate a complete data pipeline: ingestion, distributed processing, dimensional warehousing and analytical queries.
 
-## Features
-- Admin and Analyst access with signed, expiring JWT authentication.
-- KPI dashboard, content and genre analytics, subscriptions, revenue and streaming QoE.
-- Admin-only CSV upload and local ETL pipeline execution.
-- Hadoop/Hive, Pig, Java MapReduce, Sqoop and Oozie artifacts.
-- SQLite local simulator and sample CSV data.
+> **Execution honesty:** the repository contains runnable local Python processing and Hadoop/Spark/Hive job code. A distributed run is only confirmed after executing it on a configured Hadoop cluster and retaining the job output/logs. The sample data is synthetic.
 
-## Tech stack
-- Frontend: React 18, Vite, Axios, Chart.js.
-- Backend: Python, Flask, Flask-CORS, PyJWT, Gunicorn.
-- Warehouse: SQLite; sample ETL builds staging, dimension and fact tables.
+## Project objectives
+- Store large media telemetry datasets in HDFS using raw, processed and warehouse zones.
+- Process viewing events with Hadoop MapReduce and Apache Spark.
+- Build a Hive warehouse using a dimensional (star-schema) model.
+- Analyze content popularity, watch hours, viewer engagement and streaming quality.
+- Validate input records and preserve reproducible outputs.
 
-## Run locally
+## Technology stack
+| Layer | Technology | Responsibility |
+|---|---|---|
+| Storage | HDFS | Distributed raw and processed data |
+| Batch processing | Hadoop MapReduce (Streaming) | Aggregate viewing metrics by content |
+| Processing / analytics | Apache Spark (PySpark) | Scalable content and QoE aggregates |
+| Data warehouse | Apache Hive | External tables, dimensions, facts and SQL analytics |
+| Data format | CSV input; ORC-ready Hive model | Interchange and warehouse storage |
+| Language | Python, SQL, Bash | ETL, jobs and orchestration |
 
-Backend (terminal 1):
-```bash
-cd backend
-python -m venv .venv
-# Windows: .venv\\Scripts\\activate
-# macOS/Linux: source .venv/bin/activate
-pip install -r requirements.txt
-python app.py
+## Architecture
+```text
+CSV source datasets
+       |
+       v
+HDFS RAW ZONE  (/media-entertainment/raw)
+       |
+       v
+Validation / cleansing
+       |
+       +-----------------------+
+       |                       |
+       v                       v
+Hadoop Streaming          Apache Spark
+Map -> Shuffle -> Reduce  Batch aggregations
+       |                       |
+       +-----------+-----------+
+                   |
+                   v
+        HDFS PROCESSED ZONE
+                   |
+                   v
+          Apache Hive Warehouse
+       Dimensions + Fact + Analytics
+                   |
+                   v
+     Content / Engagement / QoE reports
 ```
 
-Frontend (terminal 2):
-```bash
-cd frontend
-npm install
-npm run dev
+## Repository layout
+- `data/sample/`: sample CSV datasets (synthetic).
+- `bigdata/mapreduce/`: Hadoop Streaming mapper and reducer.
+- `bigdata/hadoop/run_pipeline.sh`: HDFS upload and distributed Streaming job.
+- `bigdata/spark/content_analytics.py`: PySpark batch analytics job.
+- `bigdata/hive/`: Hive warehouse schema and analytical queries.
+- `bigdata/local/run_mapreduce.py`: local functional test of the same aggregation logic.
+- `docs/architecture.md`: detailed architecture and data model.
+- `docs/run_guide.md`: practical setup and execution guide.
+
+## Quick start: run the MapReduce logic locally
+Requires Python 3.9+; no Hadoop cluster is needed for this local functional test.
+
+**Windows PowerShell**
+```powershell
+python bigdata/local/run_mapreduce.py
 ```
-Open http://localhost:5173.
 
-Local demo credentials: `admin / Admin@123` and `analyst / Analyst@123`. These are for local development only and are not used by the production deployment.
+**Linux / macOS / WSL2**
+```bash
+python3 bigdata/local/run_mapreduce.py
+```
 
-## Live links
-- **Live dashboard:** https://mediavault-dashboard-a-star-codes.vercel.app
-- **Portfolio:** https://abhisheknj37-portfolio.vercel.app
+The command reads `data/sample/staging_viewing_activity.csv`, aggregates stream count, watched seconds and buffering events by content ID, and writes `data/output/content_metrics.tsv`. This validates the transformation logic locally; it is not a distributed Hadoop execution.
 
-## Deploy
+## Run on a Hadoop cluster
+Requirements: Java, Hadoop HDFS/YARN, Python 3 on worker nodes, and the Hadoop Streaming JAR.
 
-### 1. Flask API on Render
-Create a Python web service connected to this repository:
-- Build command: `pip install -r backend/requirements.txt`
-- Start command: `cd backend && gunicorn app:app --bind 0.0.0.0:$PORT`
-- Region: Singapore (or the nearest available region).
-- Set environment variables:
-  - `APP_ENV=production`
-  - `JWT_SECRET_KEY` = a unique random secret (at least 32 random bytes).
-  - `ADMIN_USERNAME=admin`
-  - `ADMIN_PASSWORD` = a strong private password.
-  - `ANALYST_USERNAME=analyst`
-  - `ANALYST_PASSWORD` = a separate strong private password.
-  - `CORS_ORIGINS` = the deployed Vercel frontend origin, e.g. `https://your-project.vercel.app`.
-- The free Render filesystem is ephemeral. Uploaded files and changes to the SQLite database may be lost when the service restarts or redeploys. Use persistent storage or a managed database for production data.
+```bash
+export HADOOP_STREAMING_JAR=/path/to/hadoop-streaming.jar
+chmod +x bigdata/hadoop/run_pipeline.sh
+./bigdata/hadoop/run_pipeline.sh
+```
 
-### 2. React frontend on Vercel
-- Import this GitHub repository: https://github.com/abhisheknj37/Bigdata-Mini-project
-- Root Directory: `frontend`
-- Framework: Vite
-- Build command: `npm run build`
-- Output directory: `dist`
-- Add environment variable `VITE_API_URL` with the Render service origin (without `/api`).
+The job uploads the viewing CSV to HDFS, executes the mapper/reducer across the cluster and writes results to `/media-entertainment/processed/content_metrics`. Confirm execution using YARN logs and `hdfs dfs -ls` / `hdfs dfs -cat`.
 
-## Data pipeline and Hadoop notes
-The **Run pipeline** button executes `scripts/run_local_warehouse.py`, which rebuilds `data/media_warehouse.db` from `data/sample/*.csv`. This is a local SQLite demonstration, not distributed Hadoop execution.
+## Run Spark analytics
+On a machine with PySpark installed and access to the input CSV:
+```bash
+spark-submit bigdata/spark/content_analytics.py data/sample/staging_viewing_activity.csv data/output/spark_content_metrics
+```
+For a cluster run, provide an HDFS input and output path and submit with your cluster's Spark configuration.
 
-The repository includes Hadoop/Hive, Pig, MapReduce, Sqoop and Oozie source artifacts. A real cluster must be configured and operated separately before claiming those distributed jobs have run.
+## Create Hive analytics tables
+After uploading source and MapReduce output to the HDFS locations used in `bigdata/hive/analytics.hql`:
+```bash
+hive -f bigdata/hive/analytics.hql
+```
+The script creates external tables and example queries for source counts, top content and aggregate viewing metrics.
 
-## Security notes
-- JWTs are signed with an environment-provided secret and expire after eight hours.
-- Roles are loaded from the database on each authenticated request; role values in client tokens are not trusted.
-- Production demo passwords must be supplied as private Render environment variables.
-- Use a managed database, persistent storage, HTTPS and a review of upload limits/validation before using this as a real business service.
+## Data warehouse model
+The target warehouse is a star schema:
+- **Dimensions:** `dim_date`, `dim_user`, `dim_content`, `dim_device`, `dim_subscription_plan`.
+- **Facts:** `fact_viewing_activity` (one row per viewing session) and `fact_subscription_billing` (one row per billing transaction).
+- **Measures:** watch duration, completion percentage, buffering count/duration, bitrate, billed amount.
+
+Detailed field definitions and relationships are documented in `docs/data_dictionary.md` and `docs/architecture.md`.
+
+## Data quality rules
+- Skip the CSV header and malformed rows.
+- Reject records without a content ID or with invalid numeric measures.
+- Keep non-negative measures only.
+- Reconcile source row count against accepted and rejected records before loading the warehouse.
+
+## Limitations and academic scope
+- The included datasets are sample/synthetic data, not production streaming telemetry.
+- A real HDFS/YARN cluster, Spark cluster and Hive metastore must be installed/configured separately.
+- Do not describe cluster processing as completed until the distributed job has run successfully and its output/logs are captured.
+- This repository focuses on the Big Data warehouse pipeline; the previous web dashboard is not the core project deliverable.
+
+## Team / academic project
+**Project title:** Design and Implementation of Data Warehousing Solution for Media and Entertainment on Hadoop Ecosystem.

@@ -1,48 +1,37 @@
-# Actual Big Data execution: HDFS + Hadoop MapReduce + Hive
+# Big Data Pipeline
 
-This folder adds an executable distributed-processing path alongside the existing SQLite simulator.
+This directory contains the runnable processing components for the media and entertainment warehouse.
 
-## What runs for real
-1. Upload the viewing-activity CSV into HDFS.
-2. Hadoop Streaming launches a MapReduce job with two reducers.
-3. Mapper tasks emit content-level stream, watched-time and buffering metrics.
-4. Reducers aggregate those metrics across input splits.
-5. Results are written to HDFS and exposed as an external Hive table.
+## Components
+- `mapreduce/mapper.py` and `mapreduce/reducer.py`: Hadoop Streaming aggregation by content ID.
+- `hadoop/run_pipeline.sh`: uploads viewing activity to HDFS and submits the Streaming job to YARN.
+- `spark/content_analytics.py`: PySpark batch aggregation and quality filtering.
+- `hive/warehouse_schema.hql`: dimensional warehouse DDL (dimensions and partitioned fact tables).
+- `hive/analytics.hql`: external tables over raw and MapReduce output plus analytical SQL.
+- `local/run_mapreduce.py`: local test of content aggregation logic.
 
-The React/Flask dashboard is a presentation/API layer. Do not label SQLite results as Hadoop results.
-
-## Prerequisites
-- Hadoop installed and HDFS/YARN services running.
-- Hadoop Streaming JAR from the same Hadoop distribution.
-- Python 3 available on every worker that runs a task.
-- Hive configured against the same HDFS namespace for Hive queries.
-- Run on Linux, WSL2 or a Hadoop cluster host. Hadoop must be running, not merely installed.
-
-## Run the distributed job
+## Local validation
 From the repository root:
 ```bash
-export HADOOP_STREAMING_JAR=/path/to/hadoop/share/hadoop/tools/lib/hadoop-streaming-VERSION.jar
-chmod +x bigdata/hadoop/run_pipeline.sh
-bigdata/hadoop/run_pipeline.sh
+python bigdata/local/run_mapreduce.py
 ```
-The script fails if the Streaming JAR, input CSV, HDFS or Hadoop CLI is unavailable. It does not silently fall back to SQLite.
+It writes a TSV file to `data/output/content_metrics.tsv`. This does not require Hadoop and is not a distributed job.
 
-## Run Hive queries
-After MapReduce succeeds:
+## Hadoop Streaming execution
+On a configured Hadoop host with HDFS and YARN:
 ```bash
-hive -f bigdata/hive/analytics.hql
+export HADOOP_STREAMING_JAR=/path/to/hadoop-streaming.jar
+chmod +x bigdata/hadoop/run_pipeline.sh
+./bigdata/hadoop/run_pipeline.sh
 ```
-The queries report source rows, top content by stream count, watch hours and buffering totals.
+The script uses `data/sample/staging_viewing_activity.csv` by default. It writes to `/media-entertainment/processed/content_metrics`.
 
-## Evidence for faculty
-Capture actual output from:
-- `hdfs dfs -ls /media-entertainment/raw/viewing_activity`
-- Hadoop job completion status and map/reduce task counters in YARN ResourceManager UI
-- `hdfs dfs -ls /media-entertainment/processed/content_metrics`
-- Hive query results from `analytics.hql`
+## Spark execution
+```bash
+spark-submit bigdata/spark/content_analytics.py \
+  data/sample/staging_viewing_activity.csv data/output/spark_content_metrics
+```
+For cluster execution, use an HDFS input and output path and your cluster's Spark configuration.
 
-Do not claim distributed execution until the job completes and output files exist in HDFS. A single-node pseudo-distributed cluster demonstrates Hadoop execution but is not a multi-node production cluster. For scale testing, generate larger synthetic data and report measured bytes, rows and job metrics.
-
-## Output schema
-Tab-separated: `content_id, stream_count, watched_seconds, buffering_events`.
-The mapper uses the existing CSV schema: content_id column 4, watch_duration_sec column 9 and buffer_count column 12 (1-based).
+## Hive
+Run `hive/warehouse_schema.hql` to create the target warehouse schema. Run `hive/analytics.hql` after placing source and result files in the HDFS locations declared by its external tables. The DDL is a model; dimension and fact population still requires an ETL load step.
